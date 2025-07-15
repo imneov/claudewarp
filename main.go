@@ -38,6 +38,7 @@ type ClaudeWarp struct {
 	outputWriter *io.PipeWriter          // 输出管道写端
 	inputReader  *io.PipeReader          // 输入管道读端
 	inputWriter  *io.PipeWriter          // 输入管道写端
+	resizeChan   chan os.Signal          // 窗口大小变化通道
 }
 
 var upgrader = websocket.Upgrader{
@@ -54,9 +55,10 @@ func main() {
 	printLogo()
 
 	warp := &ClaudeWarp{
-		messages:  make([]Message, 0),
-		clients:   make(map[*websocket.Conn]bool),
-		inputChan: make(chan string, 100),
+		messages:   make([]Message, 0),
+		clients:    make(map[*websocket.Conn]bool),
+		inputChan:  make(chan string, 100),
+		resizeChan: make(chan os.Signal, 1),
 	}
 
 	// 创建管道用于劫持输入输出
@@ -140,10 +142,42 @@ func (w *ClaudeWarp) startClaude(cmdStr string) error {
 		return fmt.Errorf("启动PTY失败: %v", err)
 	}
 
+	// 设置PTY窗口大小以匹配当前终端
+	w.setupPTYSize()
+	
+	// 监听窗口大小变化
+	w.handleWindowResize()
+
 	w.addMessage("output", "🚀 Claude会话已启动")
 	w.addMessage("output", "💡 劫持模式：控制台正常显示，此处监控交互")
 	
 	return nil
+}
+
+// setupPTYSize 设置PTY窗口大小
+func (w *ClaudeWarp) setupPTYSize() {
+	// 继承当前终端的窗口大小
+	if err := pty.InheritSize(os.Stdin, w.ptmx); err != nil {
+		// 如果无法继承，设置一个默认大小
+		w.addMessage("error", fmt.Sprintf("无法继承终端大小: %v", err))
+	}
+}
+
+// handleWindowResize 处理窗口大小变化
+func (w *ClaudeWarp) handleWindowResize() {
+	// 监听窗口大小变化信号
+	signal.Notify(w.resizeChan, syscall.SIGWINCH)
+	
+	go func() {
+		for range w.resizeChan {
+			if err := pty.InheritSize(os.Stdin, w.ptmx); err != nil {
+				w.addMessage("error", fmt.Sprintf("调整窗口大小失败: %v", err))
+			}
+		}
+	}()
+	
+	// 发送初始窗口大小信号
+	w.resizeChan <- syscall.SIGWINCH
 }
 
 // hijackIO 劫持Claude的输入输出
@@ -500,17 +534,30 @@ func (w *ClaudeWarp) handleInputAPI(wr http.ResponseWriter, r *http.Request) {
 
 // cleanup 清理资源
 func (w *ClaudeWarp) cleanup() {
+	// 停止窗口大小监听
+	if w.resizeChan != nil {
+		signal.Stop(w.resizeChan)
+		close(w.resizeChan)
+	}
+	
+	// 清理管道
 	if w.outputWriter != nil {
 		w.outputWriter.Close()
 	}
 	if w.inputWriter != nil {
 		w.inputWriter.Close()
 	}
+	
+	// 关闭PTY
 	if w.ptmx != nil {
 		w.ptmx.Close()
 	}
+	
+	// 终止Claude进程
 	if w.claudeCmd != nil && w.claudeCmd.Process != nil {
 		w.claudeCmd.Process.Kill()
 	}
+	
+	// 关闭通道
 	close(w.inputChan)
 }
