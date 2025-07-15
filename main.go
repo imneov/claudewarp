@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -48,9 +47,11 @@ var upgrader = websocket.Upgrader{
 }
 
 func main() {
-	var port = flag.Int("port", 8080, "Web服务器端口")
-	var claudeArgs = flag.String("claude", "claude", "Claude命令及参数")
+	var port = flag.Int("port", 8080, "Web监控端口")
 	flag.Parse()
+
+	// 显示启动LOGO
+	printLogo()
 
 	warp := &ClaudeWarp{
 		messages:  make([]Message, 0),
@@ -63,7 +64,8 @@ func main() {
 	warp.inputReader, warp.inputWriter = io.Pipe()
 
 	// 启动Claude子进程
-	if err := warp.startClaude(*claudeArgs); err != nil {
+	claudeCmd := "claude"
+	if err := warp.startClaude(claudeCmd); err != nil {
 		log.Fatalf("启动Claude失败: %v", err)
 	}
 
@@ -78,14 +80,58 @@ func main() {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
 
-	log.Println("正在关闭...")
+	fmt.Println("\n👋 ClaudeWarp 正在关闭...")
 	warp.cleanup()
+}
+
+// printLogo 打印启动LOGO
+func printLogo() {
+	logo := `
+╔═══════════════════════════════════════════════════════════════╗
+║                                                               ║
+║   ██████╗██╗      █████╗ ██╗   ██╗██████╗ ███████╗           ║
+║  ██╔════╝██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝           ║
+║  ██║     ██║     ███████║██║   ██║██║  ██║█████╗             ║
+║  ██║     ██║     ██╔══██║██║   ██║██║  ██║██╔══╝             ║
+║  ╚██████╗███████╗██║  ██║╚██████╔╝██████╔╝███████╗           ║
+║   ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝           ║
+║                                                               ║
+║                        W A R P                               ║
+║                                                               ║
+║              🚀 Session Hijacker & Monitor                    ║
+║                                                               ║
+╚═══════════════════════════════════════════════════════════════╝
+
+🔍 正在启动Claude会话劫持器...
+📡 Web监控界面将在 http://localhost:8080 启动
+💡 控制台保持Claude原始体验，Web界面提供实时监控
+
+`
+	fmt.Print(logo)
+	
+	// 显示代理设置信息
+	if httpProxy := os.Getenv("HTTP_PROXY"); httpProxy != "" {
+		fmt.Printf("🌐 检测到HTTP代理: %s\n", httpProxy)
+	}
+	if httpsProxy := os.Getenv("HTTPS_PROXY"); httpsProxy != "" {
+		fmt.Printf("🔐 检测到HTTPS代理: %s\n", httpsProxy)
+	}
+	if httpProxy := os.Getenv("http_proxy"); httpProxy != "" {
+		fmt.Printf("🌐 检测到http代理: %s\n", httpProxy)
+	}
+	if httpsProxy := os.Getenv("https_proxy"); httpsProxy != "" {
+		fmt.Printf("🔐 检测到https代理: %s\n", httpsProxy)
+	}
+	fmt.Println()
 }
 
 // startClaude 启动Claude子进程并设置PTY劫持
 func (w *ClaudeWarp) startClaude(cmdStr string) error {
 	// 创建Claude命令
 	w.claudeCmd = exec.Command("sh", "-c", cmdStr)
+	
+	// 继承当前进程的所有环境变量（包括代理设置）
+	w.claudeCmd.Env = os.Environ()
 	
 	// 启动带PTY的命令
 	var err error
@@ -94,56 +140,57 @@ func (w *ClaudeWarp) startClaude(cmdStr string) error {
 		return fmt.Errorf("启动PTY失败: %v", err)
 	}
 
-	w.addMessage("output", fmt.Sprintf("Claude已启动: %s", cmdStr))
-	w.addMessage("output", "控制台保持原始显示，Web界面提供监控和输入功能")
+	w.addMessage("output", "🚀 Claude会话已启动")
+	w.addMessage("output", "💡 劫持模式：控制台正常显示，此处监控交互")
 	
 	return nil
 }
 
 // hijackIO 劫持Claude的输入输出
 func (w *ClaudeWarp) hijackIO() {
-	// 启动输出劫持
+	// 使用io.Copy直接连接，确保完全透明的劫持
+	
+	// 输出劫持：Claude -> stdout + Web
 	go func() {
-		// 将Claude的输出同时发送到原始stdout和Web界面
-		teeReader := io.TeeReader(w.ptmx, os.Stdout)
-		scanner := bufio.NewScanner(teeReader)
-		for scanner.Scan() {
-			content := scanner.Text()
-			w.addMessage("output", content)
-		}
-		if err := scanner.Err(); err != nil {
-			w.addMessage("error", fmt.Sprintf("读取输出错误: %v", err))
+		// 创建一个TeeReader，同时写入stdout和Web界面
+		pr, pw := io.Pipe()
+		teeReader := io.TeeReader(w.ptmx, pw)
+		
+		// 复制到stdout
+		go func() {
+			defer pw.Close()
+			io.Copy(os.Stdout, teeReader)
+		}()
+		
+		// 发送到Web界面
+		buffer := make([]byte, 4096)
+		for {
+			n, err := pr.Read(buffer)
+			if err != nil {
+				break
+			}
+			content := string(buffer[:n])
+			if content != "" {
+				w.addMessage("output", content)
+			}
 		}
 	}()
 
-	// 启动输入劫持
+	// 输入劫持：stdin -> Claude，同时支持Web输入
 	go func() {
-		// 将原始stdin和Web输入合并发送到Claude
-		multiWriter := io.MultiWriter(w.ptmx, w.outputWriter)
-		
-		// 处理原始stdin
+		// 处理标准输入
 		go func() {
-			scanner := bufio.NewScanner(os.Stdin)
-			for scanner.Scan() {
-				input := scanner.Text()
-				if _, err := multiWriter.Write([]byte(input + "\n")); err != nil {
-					w.addMessage("error", fmt.Sprintf("发送输入失败: %v", err))
-					continue
-				}
-				w.addMessage("input", input+" (从控制台)")
-			}
+			io.Copy(w.ptmx, os.Stdin)
 		}()
 
 		// 处理Web输入
-		go func() {
-			for input := range w.inputChan {
-				if _, err := w.ptmx.Write([]byte(input + "\n")); err != nil {
-					w.addMessage("error", fmt.Sprintf("发送Web输入失败: %v", err))
-					continue
-				}
-				w.addMessage("input", input+" (从Web界面)")
+		for input := range w.inputChan {
+			if _, err := w.ptmx.Write([]byte(input + "\n")); err != nil {
+				w.addMessage("error", fmt.Sprintf("发送Web输入失败: %v", err))
+				continue
 			}
-		}()
+			w.addMessage("input", input+" (Web界面)")
+		}
 	}()
 }
 
@@ -185,7 +232,7 @@ func (w *ClaudeWarp) startWebServer(port int) {
 	http.HandleFunc("/api/input", w.handleInputAPI)
 	
 	addr := fmt.Sprintf(":%d", port)
-	log.Printf("Web劫持界面启动在 http://localhost%s", addr)
+	fmt.Printf("📱 Web监控界面: http://localhost%s\n", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
