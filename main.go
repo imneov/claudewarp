@@ -182,42 +182,26 @@ func (w *ClaudeWarp) handleWindowResize() {
 
 // hijackIO 劫持Claude的输入输出
 func (w *ClaudeWarp) hijackIO() {
-	// 使用io.Copy直接连接，确保完全透明的劫持
+	// 最简单的劫持方法：完全透明的双向代理
 	
-	// 输出劫持：Claude -> stdout + Web
+	// 输出代理：PTY -> stdout + Web
 	go func() {
-		// 创建一个TeeReader，同时写入stdout和Web界面
-		pr, pw := io.Pipe()
-		teeReader := io.TeeReader(w.ptmx, pw)
+		// 使用MultiWriter同时写入stdout和Web监控
+		webWriter := &webWriter{warp: w}
+		multiWriter := io.MultiWriter(os.Stdout, webWriter)
 		
-		// 复制到stdout
-		go func() {
-			defer pw.Close()
-			io.Copy(os.Stdout, teeReader)
-		}()
-		
-		// 发送到Web界面
-		buffer := make([]byte, 4096)
-		for {
-			n, err := pr.Read(buffer)
-			if err != nil {
-				break
-			}
-			content := string(buffer[:n])
-			if content != "" {
-				w.addMessage("output", content)
-			}
-		}
+		// 直接复制，完全透明
+		io.Copy(multiWriter, w.ptmx)
 	}()
 
-	// 输入劫持：stdin -> Claude，同时支持Web输入
+	// 输入代理：stdin -> PTY (完全透明)
 	go func() {
-		// 处理标准输入
-		go func() {
-			io.Copy(w.ptmx, os.Stdin)
-		}()
+		// 直接复制stdin到PTY，不做任何干预
+		io.Copy(w.ptmx, os.Stdin)
+	}()
 
-		// 处理Web输入
+	// Web输入处理（独立通道）
+	go func() {
 		for input := range w.inputChan {
 			if _, err := w.ptmx.Write([]byte(input + "\n")); err != nil {
 				w.addMessage("error", fmt.Sprintf("发送Web输入失败: %v", err))
@@ -226,6 +210,20 @@ func (w *ClaudeWarp) hijackIO() {
 			w.addMessage("input", input+" (Web界面)")
 		}
 	}()
+}
+
+// webWriter 实现io.Writer接口，用于Web界面监控
+type webWriter struct {
+	warp *ClaudeWarp
+}
+
+func (w *webWriter) Write(p []byte) (n int, err error) {
+	// 发送到Web界面
+	if len(p) > 0 {
+		content := string(p)
+		w.warp.addMessage("output", content)
+	}
+	return len(p), nil
 }
 
 // addMessage 添加消息并广播给所有客户端
