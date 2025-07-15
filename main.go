@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -222,12 +224,33 @@ type webWriter struct {
 }
 
 func (w *webWriter) Write(p []byte) (n int, err error) {
-	// 发送到Web界面
+	// 发送到Web界面，清理ANSI转义序列
 	if len(p) > 0 {
 		content := string(p)
-		w.warp.addMessage("output", content)
+		cleanContent := cleanANSI(content)
+		if cleanContent != "" {
+			w.warp.addMessage("output", cleanContent)
+		}
 	}
 	return len(p), nil
+}
+
+// cleanANSI 清理ANSI转义序列和控制字符
+func cleanANSI(input string) string {
+	// 匹配ANSI转义序列的正则表达式
+	ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+	
+	// 移除ANSI转义序列
+	cleaned := ansiRegex.ReplaceAllString(input, "")
+	
+	// 移除其他控制字符
+	controlRegex := regexp.MustCompile(`[\x00-\x1f\x7f-\x9f]`)
+	cleaned = controlRegex.ReplaceAllString(cleaned, "")
+	
+	// 清理多余的空格和换行
+	cleaned = strings.TrimSpace(cleaned)
+	
+	return cleaned
 }
 
 // addMessage 添加消息并广播给所有客户端
@@ -313,21 +336,28 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
             margin-bottom: 20px;
         }
         .message {
-            margin-bottom: 10px;
-            padding: 5px;
-            border-radius: 3px;
+            margin-bottom: 8px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            line-height: 1.4;
+            word-wrap: break-word;
+            white-space: pre-wrap;
         }
         .message.output {
-            background-color: #0e639c33;
-            border-left: 3px solid #0e639c;
+            background-color: #0e639c1a;
+            border-left: 4px solid #0e639c;
+            color: #e4e4e4;
         }
         .message.input {
-            background-color: #16825d33;
-            border-left: 3px solid #16825d;
+            background-color: #16825d1a;
+            border-left: 4px solid #16825d;
+            color: #b8f5d1;
         }
         .message.error {
-            background-color: #f1494933;
-            border-left: 3px solid #f14949;
+            background-color: #f149491a;
+            border-left: 4px solid #f14949;
+            color: #ffb3b3;
         }
         .timestamp {
             font-size: 0.8em;
@@ -425,14 +455,26 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
         }
         
         function addMessage(message) {
+            // 过滤空消息
+            if (!message.content || message.content.trim() === '') {
+                return;
+            }
+            
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message ' + message.type;
             
             const timestamp = new Date(message.timestamp).toLocaleTimeString();
-            messageDiv.innerHTML = '<span class="timestamp">' + timestamp + '</span>' + message.content;
+            const cleanContent = escapeHtml(message.content);
+            messageDiv.innerHTML = '<span class="timestamp">' + timestamp + '</span>' + cleanContent;
             
             messagesDiv.appendChild(messageDiv);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
         
         function sendInput() {
