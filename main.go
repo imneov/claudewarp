@@ -75,18 +75,26 @@ func main() {
 		log.Fatalf("启动Claude失败: %v", err)
 	}
 
-	// 启动输入输出劫持
-	warp.hijackIO()
-
 	// 启动Web服务器
 	go warp.startWebServer(*port)
 
-	// 等待信号
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	<-c
+	// 设置信号处理
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	
+	// 等待信号或劫持完成
+	go func() {
+		<-sigChan
+		fmt.Println("\n👋 ClaudeWarp 正在关闭...")
+		warp.cleanup()
+		os.Exit(0)
+	}()
 
-	fmt.Println("\n👋 ClaudeWarp 正在关闭...")
+	// 启动输入输出劫持（会阻塞直到PTY关闭）
+	warp.hijackIO()
+	
+	// 如果hijackIO返回，说明Claude进程结束了
+	fmt.Println("Claude进程已结束")
 	warp.cleanup()
 }
 
@@ -196,7 +204,23 @@ func (w *ClaudeWarp) hijackIO() {
 	
 	// 输入代理：stdin -> PTY (完全透明) - 必须先启动
 	go func() {
-		io.Copy(w.ptmx, os.Stdin)
+		buffer := make([]byte, 1)
+		for {
+			n, err := os.Stdin.Read(buffer)
+			if err != nil {
+				break
+			}
+			
+			// 检查是否是Ctrl+C (ASCII 3)
+			if n == 1 && buffer[0] == 3 {
+				fmt.Println("\n👋 ClaudeWarp 正在关闭...")
+				w.cleanup()
+				os.Exit(0)
+			}
+			
+			// 正常转发给PTY
+			w.ptmx.Write(buffer[:n])
+		}
 	}()
 
 	// Web输入处理（独立通道）
@@ -580,33 +604,45 @@ func (w *ClaudeWarp) handleInputAPI(wr http.ResponseWriter, r *http.Request) {
 func (w *ClaudeWarp) cleanup() {
 	// 恢复终端状态 - 非常重要！
 	if w.termState != nil {
-		term.Restore(int(os.Stdin.Fd()), w.termState)
+		if err := term.Restore(int(os.Stdin.Fd()), w.termState); err != nil {
+			log.Printf("恢复终端状态失败: %v", err)
+		}
+		w.termState = nil
 	}
 	
 	// 停止窗口大小监听
 	if w.resizeChan != nil {
 		signal.Stop(w.resizeChan)
 		close(w.resizeChan)
+		w.resizeChan = nil
 	}
 	
 	// 清理管道
 	if w.outputWriter != nil {
 		w.outputWriter.Close()
+		w.outputWriter = nil
 	}
 	if w.inputWriter != nil {
 		w.inputWriter.Close()
+		w.inputWriter = nil
 	}
 	
 	// 关闭PTY
 	if w.ptmx != nil {
 		w.ptmx.Close()
+		w.ptmx = nil
 	}
 	
 	// 终止Claude进程
 	if w.claudeCmd != nil && w.claudeCmd.Process != nil {
 		w.claudeCmd.Process.Kill()
+		w.claudeCmd.Process.Wait() // 等待进程真正结束
+		w.claudeCmd = nil
 	}
 	
 	// 关闭通道
-	close(w.inputChan)
+	if w.inputChan != nil {
+		close(w.inputChan)
+		w.inputChan = nil
+	}
 }
