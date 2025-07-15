@@ -136,6 +136,12 @@ func printLogo() {
 	if httpsProxy := os.Getenv("https_proxy"); httpsProxy != "" {
 		fmt.Printf("🔐 检测到https代理: %s\n", httpsProxy)
 	}
+	if allProxy := os.Getenv("all_proxy"); allProxy != "" {
+		fmt.Printf("🔄 检测到all代理: %s\n", allProxy)
+	}
+	if noProxy := os.Getenv("no_proxy"); noProxy != "" {
+		fmt.Printf("🚫 检测到no代理: %s\n", noProxy)
+	}
 	fmt.Println()
 }
 
@@ -146,6 +152,13 @@ func (w *ClaudeWarp) startClaude(cmdStr string) error {
 	
 	// 继承当前进程的所有环境变量（包括代理设置）
 	w.claudeCmd.Env = os.Environ()
+	
+	// 调试：显示传递给Claude的关键环境变量
+	for _, env := range w.claudeCmd.Env {
+		if strings.Contains(strings.ToLower(env), "proxy") {
+			w.addMessage("output", fmt.Sprintf("🔧 传递环境变量: %s", env))
+		}
+	}
 	
 	// 启动带PTY的命令
 	var err error
