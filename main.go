@@ -16,6 +16,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
+	"golang.org/x/term"
 )
 
 // Message 表示Claude交互消息
@@ -39,6 +40,7 @@ type ClaudeWarp struct {
 	inputReader  *io.PipeReader          // 输入管道读端
 	inputWriter  *io.PipeWriter          // 输入管道写端
 	resizeChan   chan os.Signal          // 窗口大小变化通道
+	termState    *term.State             // 终端状态
 }
 
 var upgrader = websocket.Upgrader{
@@ -72,7 +74,7 @@ func main() {
 	}
 
 	// 启动输入输出劫持
-	go warp.hijackIO()
+	warp.hijackIO()
 
 	// 启动Web服务器
 	go warp.startWebServer(*port)
@@ -182,21 +184,16 @@ func (w *ClaudeWarp) handleWindowResize() {
 
 // hijackIO 劫持Claude的输入输出
 func (w *ClaudeWarp) hijackIO() {
-	// 最简单的劫持方法：完全透明的双向代理
+	// 设置终端原始模式 - 这是关键！
+	var err error
+	w.termState, err = term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		w.addMessage("error", fmt.Sprintf("设置终端原始模式失败: %v", err))
+		return
+	}
 	
-	// 输出代理：PTY -> stdout + Web
+	// 输入代理：stdin -> PTY (完全透明) - 必须先启动
 	go func() {
-		// 使用MultiWriter同时写入stdout和Web监控
-		webWriter := &webWriter{warp: w}
-		multiWriter := io.MultiWriter(os.Stdout, webWriter)
-		
-		// 直接复制，完全透明
-		io.Copy(multiWriter, w.ptmx)
-	}()
-
-	// 输入代理：stdin -> PTY (完全透明)
-	go func() {
-		// 直接复制stdin到PTY，不做任何干预
 		io.Copy(w.ptmx, os.Stdin)
 	}()
 
@@ -210,6 +207,13 @@ func (w *ClaudeWarp) hijackIO() {
 			w.addMessage("input", input+" (Web界面)")
 		}
 	}()
+
+	// 输出代理：PTY -> stdout + Web (阻塞主线程)
+	webWriter := &webWriter{warp: w}
+	multiWriter := io.MultiWriter(os.Stdout, webWriter)
+	
+	// 这个调用会阻塞，直到PTY关闭
+	io.Copy(multiWriter, w.ptmx)
 }
 
 // webWriter 实现io.Writer接口，用于Web界面监控
@@ -532,6 +536,11 @@ func (w *ClaudeWarp) handleInputAPI(wr http.ResponseWriter, r *http.Request) {
 
 // cleanup 清理资源
 func (w *ClaudeWarp) cleanup() {
+	// 恢复终端状态 - 非常重要！
+	if w.termState != nil {
+		term.Restore(int(os.Stdin.Fd()), w.termState)
+	}
+	
 	// 停止窗口大小监听
 	if w.resizeChan != nil {
 		signal.Stop(w.resizeChan)
