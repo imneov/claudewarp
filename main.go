@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,19 +29,19 @@ type Message struct {
 
 // ClaudeWarp 主要结构体
 type ClaudeWarp struct {
-	claudeCmd    *exec.Cmd               // Claude子进程
-	ptmx         *os.File                // PTY主端
-	messages     []Message               // 消息历史
+	claudeCmd    *exec.Cmd                // Claude子进程
+	ptmx         *os.File                 // PTY主端
+	messages     []Message                // 消息历史
 	clients      map[*websocket.Conn]bool // WebSocket客户端
-	clientsMux   sync.RWMutex            // 客户端锁
-	messagesMux  sync.RWMutex            // 消息锁
-	inputChan    chan string             // Web输入通道
-	outputReader *io.PipeReader          // 输出管道读端
-	outputWriter *io.PipeWriter          // 输出管道写端
-	inputReader  *io.PipeReader          // 输入管道读端
-	inputWriter  *io.PipeWriter          // 输入管道写端
-	resizeChan   chan os.Signal          // 窗口大小变化通道
-	termState    *term.State             // 终端状态
+	clientsMux   sync.RWMutex             // 客户端锁
+	messagesMux  sync.RWMutex             // 消息锁
+	inputChan    chan string              // Web输入通道
+	outputReader *io.PipeReader           // 输出管道读端
+	outputWriter *io.PipeWriter           // 输出管道写端
+	inputReader  *io.PipeReader           // 输入管道读端
+	inputWriter  *io.PipeWriter           // 输入管道写端
+	resizeChan   chan os.Signal           // 窗口大小变化通道
+	termState    *term.State              // 终端状态
 }
 
 var upgrader = websocket.Upgrader{
@@ -81,7 +80,7 @@ func main() {
 	// 设置信号处理
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	
+
 	// 等待信号或劫持完成
 	go func() {
 		<-sigChan
@@ -92,7 +91,7 @@ func main() {
 
 	// 启动输入输出劫持（会阻塞直到PTY关闭）
 	warp.hijackIO()
-	
+
 	// 如果hijackIO返回，说明Claude进程结束了
 	fmt.Println("Claude进程已结束")
 	warp.cleanup()
@@ -122,7 +121,7 @@ func printLogo() {
 
 `
 	fmt.Print(logo)
-	
+
 	// 显示代理设置信息
 	if httpProxy := os.Getenv("HTTP_PROXY"); httpProxy != "" {
 		fmt.Printf("🌐 检测到HTTP代理: %s\n", httpProxy)
@@ -149,17 +148,17 @@ func printLogo() {
 func (w *ClaudeWarp) startClaude(cmdStr string) error {
 	// 创建Claude命令
 	w.claudeCmd = exec.Command("sh", "-c", cmdStr)
-	
+
 	// 继承当前进程的所有环境变量（包括代理设置）
 	w.claudeCmd.Env = os.Environ()
-	
+
 	// 调试：显示传递给Claude的关键环境变量
 	for _, env := range w.claudeCmd.Env {
 		if strings.Contains(strings.ToLower(env), "proxy") {
 			w.addMessage("output", fmt.Sprintf("🔧 传递环境变量: %s", env))
 		}
 	}
-	
+
 	// 启动带PTY的命令
 	var err error
 	w.ptmx, err = pty.Start(w.claudeCmd)
@@ -169,13 +168,13 @@ func (w *ClaudeWarp) startClaude(cmdStr string) error {
 
 	// 设置PTY窗口大小以匹配当前终端
 	w.setupPTYSize()
-	
+
 	// 监听窗口大小变化
 	w.handleWindowResize()
 
 	w.addMessage("output", "🚀 Claude会话已启动")
 	w.addMessage("output", "💡 劫持模式：控制台正常显示，此处监控交互")
-	
+
 	return nil
 }
 
@@ -192,7 +191,7 @@ func (w *ClaudeWarp) setupPTYSize() {
 func (w *ClaudeWarp) handleWindowResize() {
 	// 监听窗口大小变化信号
 	signal.Notify(w.resizeChan, syscall.SIGWINCH)
-	
+
 	go func() {
 		for range w.resizeChan {
 			if err := pty.InheritSize(os.Stdin, w.ptmx); err != nil {
@@ -200,7 +199,7 @@ func (w *ClaudeWarp) handleWindowResize() {
 			}
 		}
 	}()
-	
+
 	// 发送初始窗口大小信号
 	w.resizeChan <- syscall.SIGWINCH
 }
@@ -214,7 +213,7 @@ func (w *ClaudeWarp) hijackIO() {
 		w.addMessage("error", fmt.Sprintf("设置终端原始模式失败: %v", err))
 		return
 	}
-	
+
 	// 输入代理：stdin -> PTY (完全透明) - 必须先启动
 	go func() {
 		buffer := make([]byte, 1)
@@ -223,14 +222,14 @@ func (w *ClaudeWarp) hijackIO() {
 			if err != nil {
 				break
 			}
-			
+
 			// 检查是否是Ctrl+C (ASCII 3)
 			if n == 1 && buffer[0] == 3 {
 				fmt.Println("\n👋 ClaudeWarp 正在关闭...")
 				w.cleanup()
 				os.Exit(0)
 			}
-			
+
 			// 正常转发给PTY
 			w.ptmx.Write(buffer[:n])
 		}
@@ -250,7 +249,7 @@ func (w *ClaudeWarp) hijackIO() {
 	// 输出代理：PTY -> stdout + Web (阻塞主线程)
 	webWriter := &webWriter{warp: w}
 	multiWriter := io.MultiWriter(os.Stdout, webWriter)
-	
+
 	// 这个调用会阻塞，直到PTY关闭
 	io.Copy(multiWriter, w.ptmx)
 }
@@ -261,33 +260,31 @@ type webWriter struct {
 }
 
 func (w *webWriter) Write(p []byte) (n int, err error) {
-	// 发送到Web界面，清理ANSI转义序列
+	// 发送原始终端数据到Web界面（包含ANSI转义序列）
 	if len(p) > 0 {
 		content := string(p)
-		cleanContent := cleanANSI(content)
-		if cleanContent != "" {
-			w.warp.addMessage("output", cleanContent)
-		}
+		w.warp.sendTerminalData(content)
 	}
 	return len(p), nil
 }
 
-// cleanANSI 清理ANSI转义序列和控制字符
-func cleanANSI(input string) string {
-	// 匹配ANSI转义序列的正则表达式
-	ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
-	
-	// 移除ANSI转义序列
-	cleaned := ansiRegex.ReplaceAllString(input, "")
-	
-	// 移除其他控制字符
-	controlRegex := regexp.MustCompile(`[\x00-\x1f\x7f-\x9f]`)
-	cleaned = controlRegex.ReplaceAllString(cleaned, "")
-	
-	// 清理多余的空格和换行
-	cleaned = strings.TrimSpace(cleaned)
-	
-	return cleaned
+// sendTerminalData 发送原始终端数据到Web界面
+func (w *ClaudeWarp) sendTerminalData(content string) {
+	w.clientsMux.RLock()
+	defer w.clientsMux.RUnlock()
+
+	// 发送原始终端数据（包含ANSI转义序列）
+	data, _ := json.Marshal(map[string]interface{}{
+		"type":    "terminal_data",
+		"content": content,
+	})
+
+	for client := range w.clients {
+		if err := client.WriteMessage(websocket.TextMessage, data); err != nil {
+			client.Close()
+			delete(w.clients, client)
+		}
+	}
 }
 
 // addMessage 添加消息并广播给所有客户端
@@ -297,11 +294,11 @@ func (w *ClaudeWarp) addMessage(msgType, content string) {
 		Content:   content,
 		Timestamp: time.Now(),
 	}
-	
+
 	w.messagesMux.Lock()
 	w.messages = append(w.messages, msg)
 	w.messagesMux.Unlock()
-	
+
 	// 广播给所有WebSocket客户端
 	w.broadcastMessage(msg)
 }
@@ -310,7 +307,7 @@ func (w *ClaudeWarp) addMessage(msgType, content string) {
 func (w *ClaudeWarp) broadcastMessage(msg Message) {
 	w.clientsMux.RLock()
 	defer w.clientsMux.RUnlock()
-	
+
 	data, _ := json.Marshal(msg)
 	for client := range w.clients {
 		if err := client.WriteMessage(websocket.TextMessage, data); err != nil {
@@ -326,7 +323,7 @@ func (w *ClaudeWarp) startWebServer(port int) {
 	http.HandleFunc("/ws", w.handleWebSocket)
 	http.HandleFunc("/api/messages", w.handleMessages)
 	http.HandleFunc("/api/input", w.handleInputAPI)
-	
+
 	addr := fmt.Sprintf(":%d", port)
 	fmt.Printf("📱 Web监控界面: http://localhost%s\n", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
@@ -338,17 +335,18 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>ClaudeWarp - Session Hijacker</title>
+    <title>ClaudeWarp - Terminal Hijacker</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
     <style>
         body {
-            font-family: 'Courier New', monospace;
+            font-family: 'Menlo', 'Courier New', monospace;
             margin: 0;
             padding: 20px;
             background-color: #1e1e1e;
             color: #d4d4d4;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
         }
         .header {
@@ -363,47 +361,23 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
             margin-bottom: 20px;
             border-left: 4px solid #0e639c;
         }
-        .session-box {
-            background-color: #252526;
-            border: 1px solid #3e3e42;
-            border-radius: 5px;
-            height: 500px;
-            overflow-y: auto;
+        #terminal-container {
+            width: 100%;
+            height: 65vh;
             padding: 10px;
-            margin-bottom: 20px;
+            box-sizing: border-box;
+            background-color: #0c0c0c;
+            border: 1px solid #333;
+            border-radius: 5px;
         }
-        .message {
-            margin-bottom: 8px;
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 14px;
-            line-height: 1.4;
-            word-wrap: break-word;
-            white-space: pre-wrap;
-        }
-        .message.output {
-            background-color: #0e639c1a;
-            border-left: 4px solid #0e639c;
-            color: #e4e4e4;
-        }
-        .message.input {
-            background-color: #16825d1a;
-            border-left: 4px solid #16825d;
-            color: #b8f5d1;
-        }
-        .message.error {
-            background-color: #f149491a;
-            border-left: 4px solid #f14949;
-            color: #ffb3b3;
-        }
-        .timestamp {
-            font-size: 0.8em;
-            color: #888;
-            margin-right: 10px;
+        #terminal {
+            width: 100%;
+            height: 100%;
         }
         .input-section {
             display: flex;
             gap: 10px;
+            margin-top: 20px;
         }
         .input-box {
             flex: 1;
@@ -441,15 +415,17 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔍 ClaudeWarp Session Hijacker</h1>
+            <h1>🔍 ClaudeWarp Terminal Hijacker</h1>
             <div id="status" class="status disconnected">● 连接中...</div>
         </div>
         
         <div class="info-box">
-            <strong>💡 劫持模式:</strong> Claude在控制台正常运行，此界面监控所有交互并允许远程输入
+            <strong>💡 终端劫持模式:</strong> 完全同步真实终端输出，支持所有ANSI转义序列和颜色
         </div>
         
-        <div id="messages" class="session-box"></div>
+        <div id="terminal-container">
+            <div id="terminal"></div>
+        </div>
         
         <div class="input-section">
             <input type="text" id="inputBox" class="input-box" placeholder="远程输入到Claude..." />
@@ -457,61 +433,72 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
     <script>
-        const messagesDiv = document.getElementById('messages');
+        const terminalContainer = document.getElementById('terminal-container');
+        const terminalDiv = document.getElementById('terminal');
         const inputBox = document.getElementById('inputBox');
         const sendBtn = document.getElementById('sendBtn');
         const statusDiv = document.getElementById('status');
         
+        const term = new Terminal({
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: 'Menlo, "DejaVu Sans Mono", Consolas, "Lucida Console", monospace',
+            theme: {
+                background: '#0c0c0c',
+                foreground: '#d4d4d4',
+                cursor: '#d4d4d4',
+            },
+            rows: 30, // Default, will be adjusted by fit addon
+        });
+        
+        const fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+        term.open(terminalDiv);
+        
+        function fitTerminal() {
+            try {
+                fitAddon.fit();
+            } catch (e) {
+                console.error("Fit addon error:", e);
+            }
+        }
+        
+        // Fit terminal on load and on window resize
+        window.addEventListener('load', fitTerminal);
+        window.addEventListener('resize', fitTerminal);
+        
         let ws;
         
         function connect() {
-            ws = new WebSocket('ws://localhost:' + window.location.port + '/ws');
+            ws = new WebSocket('ws://' + window.location.host + '/ws');
             
             ws.onopen = function() {
-                statusDiv.textContent = '● 劫持已连接';
+                statusDiv.textContent = '● 终端劫持已连接';
                 statusDiv.className = 'status connected';
-                loadHistory();
+                fitTerminal(); // Fit again on connect
             };
             
             ws.onmessage = function(event) {
-                const message = JSON.parse(event.data);
-                addMessage(message);
+                const data = JSON.parse(event.data);
+                if (data.type === 'terminal_data' && typeof data.content === 'string') {
+                    term.write(data.content);
+                }
             };
             
             ws.onclose = function() {
-                statusDiv.textContent = '● 劫持连接断开';
+                statusDiv.textContent = '● 终端劫持连接断开';
                 statusDiv.className = 'status disconnected';
-                setTimeout(connect, 3000); // 3秒后重连
+                setTimeout(connect, 3000);
             };
             
             ws.onerror = function(error) {
-                statusDiv.textContent = '● 劫持连接错误';
+                console.error('WebSocket Error: ', error);
+                statusDiv.textContent = '● 终端劫持连接错误';
                 statusDiv.className = 'status disconnected';
             };
-        }
-        
-        function addMessage(message) {
-            // 过滤空消息
-            if (!message.content || message.content.trim() === '') {
-                return;
-            }
-            
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'message ' + message.type;
-            
-            const timestamp = new Date(message.timestamp).toLocaleTimeString();
-            const cleanContent = escapeHtml(message.content);
-            messageDiv.innerHTML = '<span class="timestamp">' + timestamp + '</span>' + cleanContent;
-            
-            messagesDiv.appendChild(messageDiv);
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-        }
-        
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
         }
         
         function sendInput() {
@@ -524,15 +511,6 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
                 });
                 inputBox.value = '';
             }
-        }
-        
-        function loadHistory() {
-            fetch('/api/messages')
-                .then(response => response.json())
-                .then(messages => {
-                    messagesDiv.innerHTML = '';
-                    messages.forEach(addMessage);
-                });
         }
         
         sendBtn.addEventListener('click', sendInput);
@@ -558,17 +536,17 @@ func (w *ClaudeWarp) handleWebSocket(wr http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
-	
+
 	w.clientsMux.Lock()
 	w.clients[conn] = true
 	w.clientsMux.Unlock()
-	
+
 	defer func() {
 		w.clientsMux.Lock()
 		delete(w.clients, conn)
 		w.clientsMux.Unlock()
 	}()
-	
+
 	// 保持连接活跃
 	for {
 		_, _, err := conn.ReadMessage()
@@ -583,7 +561,7 @@ func (w *ClaudeWarp) handleMessages(wr http.ResponseWriter, r *http.Request) {
 	w.messagesMux.RLock()
 	data, _ := json.Marshal(w.messages)
 	w.messagesMux.RUnlock()
-	
+
 	wr.Header().Set("Content-Type", "application/json")
 	wr.Write(data)
 }
@@ -594,16 +572,16 @@ func (w *ClaudeWarp) handleInputAPI(wr http.ResponseWriter, r *http.Request) {
 		http.Error(wr, "仅支持POST方法", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	var req struct {
 		Input string `json:"input"`
 	}
-	
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(wr, "无效的JSON", http.StatusBadRequest)
 		return
 	}
-	
+
 	// 发送到输入通道
 	select {
 	case w.inputChan <- req.Input:
@@ -622,14 +600,14 @@ func (w *ClaudeWarp) cleanup() {
 		}
 		w.termState = nil
 	}
-	
+
 	// 停止窗口大小监听
 	if w.resizeChan != nil {
 		signal.Stop(w.resizeChan)
 		close(w.resizeChan)
 		w.resizeChan = nil
 	}
-	
+
 	// 清理管道
 	if w.outputWriter != nil {
 		w.outputWriter.Close()
@@ -639,20 +617,20 @@ func (w *ClaudeWarp) cleanup() {
 		w.inputWriter.Close()
 		w.inputWriter = nil
 	}
-	
+
 	// 关闭PTY
 	if w.ptmx != nil {
 		w.ptmx.Close()
 		w.ptmx = nil
 	}
-	
+
 	// 终止Claude进程
 	if w.claudeCmd != nil && w.claudeCmd.Process != nil {
 		w.claudeCmd.Process.Kill()
 		w.claudeCmd.Process.Wait() // 等待进程真正结束
 		w.claudeCmd = nil
 	}
-	
+
 	// 关闭通道
 	if w.inputChan != nil {
 		close(w.inputChan)
