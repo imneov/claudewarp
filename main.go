@@ -60,6 +60,7 @@ var upgrader = websocket.Upgrader{
 
 func main() {
 	var port = flag.Int("port", 8080, "Web监控端口")
+	var host = flag.String("host", "localhost", "Web监控主机地址")
 	flag.Parse()
 
 	warp := &ClaudeWarp{
@@ -107,11 +108,11 @@ func main() {
 	}
 
 	// 启动Web服务器
-	go warp.startWebServer(*port)
+	go warp.startWebServer(*host, *port)
 
 	// 在主控制台和Web端显示监控地址
-	addr := fmt.Sprintf(":%d", *port)
-	fmt.Fprintf(initialWriter, "📱 Web监控界面: http://localhost%s\n\n", addr)
+	addr := fmt.Sprintf("%s:%d", *host, *port)
+	fmt.Fprintf(initialWriter, "📱 Web监控界面: http://%s\n\n", addr)
 
 	// 设置信号处理
 	sigChan := make(chan os.Signal, 1)
@@ -152,7 +153,6 @@ func printLogo(w io.Writer) {
 ╚═══════════════════════════════════════════════════════════════╝
 
 🔍 正在启动Claude会话劫持器...
-📡 Web监控界面将在 http://localhost:8080 启动
 💡 控制台保持Claude原始体验，Web界面提供实时监控
 
 `
@@ -338,14 +338,17 @@ func (w *ClaudeWarp) broadcastMessage(msg Message) {
 }
 
 // startWebServer 启动Web服务器
-func (w *ClaudeWarp) startWebServer(port int) {
+func (w *ClaudeWarp) startWebServer(host string, port int) {
 	http.HandleFunc("/", w.handleIndex)
 	http.HandleFunc("/ws", w.handleWebSocket)
 	http.HandleFunc("/api/messages", w.handleMessages)
 	http.HandleFunc("/api/input", w.handleInputAPI)
 
-	addr := fmt.Sprintf(":%d", port)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	addr := fmt.Sprintf("%s:%d", host, port)
+	log.Printf("🚀 Web服务器启动于 %s", addr)
+	if err := http.ListenAndServe(addr, nil); err != nil {
+		log.Fatalf("无法启动Web服务器: %v", err)
+	}
 }
 
 // handleIndex 处理主页
