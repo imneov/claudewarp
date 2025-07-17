@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -29,19 +30,20 @@ type Message struct {
 
 // ClaudeWarp 主要结构体
 type ClaudeWarp struct {
-	claudeCmd    *exec.Cmd                // Claude子进程
-	ptmx         *os.File                 // PTY主端
-	messages     []Message                // 消息历史
-	clients      map[*websocket.Conn]bool // WebSocket客户端
-	clientsMux   sync.RWMutex             // 客户端锁
-	messagesMux  sync.RWMutex             // 消息锁
-	inputChan    chan string              // Web输入通道
-	outputReader *io.PipeReader           // 输出管道读端
-	outputWriter *io.PipeWriter           // 输出管道写端
-	inputReader  *io.PipeReader           // 输入管道读端
-	inputWriter  *io.PipeWriter           // 输入管道写端
-	resizeChan   chan os.Signal           // 窗口大小变化通道
-	termState    *term.State              // 终端状态
+	claudeCmd     *exec.Cmd                // Claude子进程
+	ptmx          *os.File                 // PTY主端
+	messages      []Message                // 消息历史
+	clients       map[*websocket.Conn]bool // WebSocket客户端
+	clientsMux    sync.RWMutex             // 客户端锁
+	messagesMux   sync.RWMutex             // 消息锁
+	inputChan     chan string              // Web输入通道
+	outputReader  *io.PipeReader           // 输出管道读端
+	outputWriter  *io.PipeWriter           // 输出管道写端
+	inputReader   *io.PipeReader           // 输入管道读端
+	inputWriter   *io.PipeWriter           // 输入管道写端
+	resizeChan    chan os.Signal           // 窗口大小变化通道
+	termState     *term.State              // 终端状态
+	startupBuffer bytes.Buffer             // 启动日志缓冲区
 }
 
 var upgrader = websocket.Upgrader{
@@ -54,15 +56,39 @@ func main() {
 	var port = flag.Int("port", 8080, "Web监控端口")
 	flag.Parse()
 
-	// 显示启动LOGO
-	printLogo()
-
 	warp := &ClaudeWarp{
 		messages:   make([]Message, 0),
 		clients:    make(map[*websocket.Conn]bool),
 		inputChan:  make(chan string, 100),
 		resizeChan: make(chan os.Signal, 1),
 	}
+
+	// 创建一个同时写入os.Stdout和启动缓冲区的writer
+	initialWriter := io.MultiWriter(os.Stdout, &warp.startupBuffer)
+
+	// 显示启动LOGO
+	printLogo(initialWriter)
+
+	// 显示代理设置信息
+	if httpProxy := os.Getenv("HTTP_PROXY"); httpProxy != "" {
+		fmt.Fprintf(initialWriter, "🌐 检测到HTTP代理: %s\n", httpProxy)
+	}
+	if httpsProxy := os.Getenv("HTTPS_PROXY"); httpsProxy != "" {
+		fmt.Fprintf(initialWriter, "🔐 检测到HTTPS代理: %s\n", httpsProxy)
+	}
+	if httpProxy := os.Getenv("http_proxy"); httpProxy != "" {
+		fmt.Fprintf(initialWriter, "🌐 检测到http代理: %s\n", httpProxy)
+	}
+	if httpsProxy := os.Getenv("https_proxy"); httpsProxy != "" {
+		fmt.Fprintf(initialWriter, "🔐 检测到https代理: %s\n", httpsProxy)
+	}
+	if allProxy := os.Getenv("all_proxy"); allProxy != "" {
+		fmt.Fprintf(initialWriter, "🔄 检测到all代理: %s\n", allProxy)
+	}
+	if noProxy := os.Getenv("no_proxy"); noProxy != "" {
+		fmt.Fprintf(initialWriter, "🚫 检测到no代理: %s\n", noProxy)
+	}
+	fmt.Fprintln(initialWriter)
 
 	// 创建管道用于劫持输入输出
 	warp.outputReader, warp.outputWriter = io.Pipe()
@@ -76,6 +102,10 @@ func main() {
 
 	// 启动Web服务器
 	go warp.startWebServer(*port)
+
+	// 在主控制台和Web端显示监控地址
+	addr := fmt.Sprintf(":%d", *port)
+	fmt.Fprintf(initialWriter, "📱 Web监控界面: http://localhost%s\n\n", addr)
 
 	// 设置信号处理
 	sigChan := make(chan os.Signal, 1)
@@ -98,7 +128,7 @@ func main() {
 }
 
 // printLogo 打印启动LOGO
-func printLogo() {
+func printLogo(w io.Writer) {
 	logo := `
 ╔═══════════════════════════════════════════════════════════════╗
 ║                                                               ║
@@ -120,28 +150,7 @@ func printLogo() {
 💡 控制台保持Claude原始体验，Web界面提供实时监控
 
 `
-	fmt.Print(logo)
-
-	// 显示代理设置信息
-	if httpProxy := os.Getenv("HTTP_PROXY"); httpProxy != "" {
-		fmt.Printf("🌐 检测到HTTP代理: %s\n", httpProxy)
-	}
-	if httpsProxy := os.Getenv("HTTPS_PROXY"); httpsProxy != "" {
-		fmt.Printf("🔐 检测到HTTPS代理: %s\n", httpsProxy)
-	}
-	if httpProxy := os.Getenv("http_proxy"); httpProxy != "" {
-		fmt.Printf("🌐 检测到http代理: %s\n", httpProxy)
-	}
-	if httpsProxy := os.Getenv("https_proxy"); httpsProxy != "" {
-		fmt.Printf("🔐 检测到https代理: %s\n", httpsProxy)
-	}
-	if allProxy := os.Getenv("all_proxy"); allProxy != "" {
-		fmt.Printf("🔄 检测到all代理: %s\n", allProxy)
-	}
-	if noProxy := os.Getenv("no_proxy"); noProxy != "" {
-		fmt.Printf("🚫 检测到no代理: %s\n", noProxy)
-	}
-	fmt.Println()
+	fmt.Fprint(w, logo)
 }
 
 // startClaude 启动Claude子进程并设置PTY劫持
@@ -299,8 +308,9 @@ func (w *ClaudeWarp) addMessage(msgType, content string) {
 	w.messages = append(w.messages, msg)
 	w.messagesMux.Unlock()
 
-	// 广播给所有WebSocket客户端
-	w.broadcastMessage(msg)
+	// 格式化消息并发送到Web终端
+	formattedContent := fmt.Sprintf("📢 %s\r\n", content)
+	w.sendTerminalData(formattedContent)
 }
 
 // broadcastMessage 广播消息给所有客户端
@@ -325,7 +335,6 @@ func (w *ClaudeWarp) startWebServer(port int) {
 	http.HandleFunc("/api/input", w.handleInputAPI)
 
 	addr := fmt.Sprintf(":%d", port)
-	fmt.Printf("📱 Web监控界面: http://localhost%s\n", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
@@ -536,6 +545,19 @@ func (w *ClaudeWarp) handleWebSocket(wr http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+
+	// 将启动日志发送给新连接的客户端
+	if w.startupBuffer.Len() > 0 {
+		content := w.startupBuffer.String()
+		content = strings.ReplaceAll(content, "\n", "\r\n")
+		data, _ := json.Marshal(map[string]interface{}{
+			"type":    "terminal_data",
+			"content": content,
+		})
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			log.Printf("发送启动日志给新客户端失败: %v", err)
+		}
+	}
 
 	w.clientsMux.Lock()
 	w.clients[conn] = true
