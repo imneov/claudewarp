@@ -1,41 +1,55 @@
-# Website
+# ClaudeWarp Documentation
 
-This website is built using [Docusaurus](https://docusaurus.io/), a modern static website generator.
+Official documentation website for ClaudeWarp, built with [Docusaurus](https://docusaurus.io/).
 
-## Installation
+## Overview
+
+This documentation site provides comprehensive guides, API references, and tutorials for ClaudeWarp - a full-featured bridge that connects Claude with chat platforms.
+
+## Development
+
+### Installation
 
 ```bash
-yarn
+cd docs
+yarn install
 ```
 
-## Local Development
+### Local Development
 
 ```bash
 yarn start
 ```
 
-This command starts a local development server and opens up a browser window. Most changes are reflected live without having to restart the server.
+Starts a local development server at `http://localhost:3000` with hot reload.
 
-## Build
+### Build
 
 ```bash
 yarn build
 ```
 
-This command generates static content into the `build` directory and can be served using any static contents hosting service.
+Generates static content for production deployment.
 
-## Deployment
+### Deployment
 
-Using SSH:
-
-```bash
-USE_SSH=true yarn deploy
-```
-
-Not using SSH:
+For GitHub Pages deployment:
 
 ```bash
 GIT_USER=<Your GitHub username> yarn deploy
 ```
 
-If you are using GitHub pages for hosting, this command is a convenient way to build the website and push to the `gh-pages` branch.
+## Structure
+
+- `docs/` - Markdown documentation files
+- `src/pages/` - React pages and components
+- `static/` - Static assets (images, icons, etc.)
+- `docusaurus.config.ts` - Site configuration
+
+## Features
+
+- 🎨 FoalTS-inspired design with blue gradient theme
+- 📱 Responsive design for all devices
+- 🔍 Full-text search capability
+- 🌐 Multi-language support (Chinese/English)
+- ⚡ Fast static site generation

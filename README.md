@@ -2,25 +2,30 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.23+-blue.svg)](https://golang.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Documentation](https://img.shields.io/badge/docs-claudewarp.dev-blue)](https://claudewarp.dev)
 
-> 🚀 Session Hijacker & Monitor for Claude Code
+> 🚀 Full-featured Claude bridge
 > 
-> ClaudeWarp 是一个 Go 语言开发的 Claude Code 环境桥接工具，提供实时终端劫持和 Web 监控功能。
+> ClaudeWarp is an intelligent remote control cockpit that connects Claude with chat platforms, providing real-time collaboration monitoring and multi-platform integration capabilities.
 
-## 核心功能
+## ✨ Core Features
 
-🔍 **终端劫持** - 完全透明地劫持 Claude 进程的输入输出  
-📱 **Web 监控** - 实时 Web 界面显示所有 Claude 交互  
-⚡ **实时通信** - WebSocket 实现双向实时数据传输  
-📊 **消息历史** - 结构化记录和回放所有交互  
-🖥️ **PTY 支持** - 完整的终端仿真和 ANSI 转义序列支持  
+🎛️ **All-in-One Remote Control** - Built-in web interface for seamless Claude interaction  
+🤝 **Real-time Collaboration** - WebSocket-powered multi-user monitoring with session history  
+🌐 **Multi-platform Bridge** - Native integrations for Telegram, Slack, Discord and more  
+📊 **Session History** - Complete interaction recording and structured logging  
+🖥️ **PTY Technology** - Full terminal emulation with ANSI escape sequence support  
 
-## 架构特点
+## 📖 Documentation
 
-- **无侵入性**: 对 Claude 进程完全透明，保持原始体验
-- **实时监控**: Web 界面提供完整的终端模拟和实时更新
-- **高性能**: 基于 PTY 的高效 I/O 劫持机制
-- **跨平台**: 支持 macOS、Linux 等 Unix-like 系统
+Visit our [documentation website](https://claudewarp.dev) for comprehensive guides, API references, and examples.
+
+## 🏗️ Architecture
+
+- **Non-intrusive**: Completely transparent to Claude processes while maintaining original experience
+- **Real-time Monitoring**: Web interface provides complete terminal simulation with real-time updates  
+- **High Performance**: Efficient I/O hijacking based on PTY technology
+- **Cross-platform**: Supports macOS, Linux and other Unix-like systems
 
 ## 快速开始
 
