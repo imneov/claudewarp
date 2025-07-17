@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod init:*)",
+      "Bash(go mod:*)",
+      "Bash(chmod:*)",
+      "Bash(go run:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(gtimeout:*)",
+      "Bash(git commit:*)",
+      "Bash(env)",
+      "Bash(go build:*)",
+      "Bash(grep:*)",
+      "Bash(pkill:*)",
+      "Bash(git restore:*)",
+      "Bash(curl:*)"
+    ],
+    "deny": []
+  }
+}
