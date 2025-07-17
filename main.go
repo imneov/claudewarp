@@ -36,7 +36,7 @@ type ClaudeWarp struct {
 	clients       map[*websocket.Conn]bool // WebSocket客户端
 	clientsMux    sync.RWMutex             // 客户端锁
 	messagesMux   sync.RWMutex             // 消息锁
-	inputChan     chan string              // Web输入通道
+	inputChan     chan WebInput            // Web输入通道
 	outputReader  *io.PipeReader           // 输出管道读端
 	outputWriter  *io.PipeWriter           // 输出管道写端
 	inputReader   *io.PipeReader           // 输入管道读端
@@ -44,6 +44,12 @@ type ClaudeWarp struct {
 	resizeChan    chan os.Signal           // 窗口大小变化通道
 	termState     *term.State              // 终端状态
 	startupBuffer bytes.Buffer             // 启动日志缓冲区
+}
+
+// WebInput defines the structure for input coming from the web UI.
+type WebInput struct {
+	Content    string `json:"input"`
+	AddNewline bool   `json:"add_newline"`
 }
 
 var upgrader = websocket.Upgrader{
@@ -59,7 +65,7 @@ func main() {
 	warp := &ClaudeWarp{
 		messages:   make([]Message, 0),
 		clients:    make(map[*websocket.Conn]bool),
-		inputChan:  make(chan string, 100),
+		inputChan:  make(chan WebInput, 100),
 		resizeChan: make(chan os.Signal, 1),
 	}
 
@@ -246,12 +252,16 @@ func (w *ClaudeWarp) hijackIO() {
 
 	// Web输入处理（独立通道）
 	go func() {
-		for input := range w.inputChan {
-			if _, err := w.ptmx.Write([]byte(input + "\n")); err != nil {
+		for webInput := range w.inputChan {
+			content := webInput.Content
+			if webInput.AddNewline {
+				content += "\n"
+			}
+			if _, err := w.ptmx.Write([]byte(content)); err != nil {
 				w.addMessage("error", fmt.Sprintf("发送Web输入失败: %v", err))
 				continue
 			}
-			w.addMessage("input", input+" (Web界面)")
+			w.addMessage("input", webInput.Content+" (Web界面)")
 		}
 	}()
 
@@ -385,6 +395,7 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
         }
         .input-section {
             display: flex;
+            align-items: center;
             gap: 10px;
             margin-top: 20px;
         }
@@ -407,6 +418,12 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
         }
         .send-btn:hover {
             background-color: #1177bb;
+        }
+        .input-options {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            color: #aaa;
         }
         .status {
             text-align: center;
@@ -439,6 +456,10 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
         <div class="input-section">
             <input type="text" id="inputBox" class="input-box" placeholder="远程输入到Claude..." />
             <button id="sendBtn" class="send-btn">发送</button>
+            <div class="input-options">
+                <input type="checkbox" id="newlineCheckbox" checked>
+                <label for="newlineCheckbox">追加回车</label>
+            </div>
         </div>
     </div>
 
@@ -449,6 +470,7 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
         const terminalDiv = document.getElementById('terminal');
         const inputBox = document.getElementById('inputBox');
         const sendBtn = document.getElementById('sendBtn');
+        const newlineCheckbox = document.getElementById('newlineCheckbox');
         const statusDiv = document.getElementById('status');
         
         const term = new Terminal({
@@ -461,6 +483,7 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
                 cursor: '#d4d4d4',
             },
             rows: 30, // Default, will be adjusted by fit addon
+            convertEol: true, // Automatically convert \n to \r\n
         });
         
         const fitAddon = new FitAddon.FitAddon();
@@ -475,7 +498,6 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
             }
         }
         
-        // Fit terminal on load and on window resize
         window.addEventListener('load', fitTerminal);
         window.addEventListener('resize', fitTerminal);
         
@@ -487,7 +509,7 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
             ws.onopen = function() {
                 statusDiv.textContent = '● 终端劫持已连接';
                 statusDiv.className = 'status connected';
-                fitTerminal(); // Fit again on connect
+                fitTerminal();
             };
             
             ws.onmessage = function(event) {
@@ -511,12 +533,17 @@ func (w *ClaudeWarp) handleIndex(wr http.ResponseWriter, r *http.Request) {
         }
         
         function sendInput() {
-            const input = inputBox.value.trim();
-            if (input && ws && ws.readyState === WebSocket.OPEN) {
+            const input = inputBox.value; // Don't trim, to allow sending just spaces if needed
+            if (!input) return;
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
                 fetch('/api/input', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({input: input})
+                    body: JSON.stringify({
+                        input: input,
+                        add_newline: newlineCheckbox.checked
+                    })
                 });
                 inputBox.value = '';
             }
@@ -549,7 +576,7 @@ func (w *ClaudeWarp) handleWebSocket(wr http.ResponseWriter, r *http.Request) {
 	// 将启动日志发送给新连接的客户端
 	if w.startupBuffer.Len() > 0 {
 		content := w.startupBuffer.String()
-		content = strings.ReplaceAll(content, "\n", "\r\n")
+		// content = strings.ReplaceAll(content, "\n", "\r\n") // Xterm.js with convertEol:true handles this
 		data, _ := json.Marshal(map[string]interface{}{
 			"type":    "terminal_data",
 			"content": content,
@@ -571,8 +598,7 @@ func (w *ClaudeWarp) handleWebSocket(wr http.ResponseWriter, r *http.Request) {
 
 	// 保持连接活跃
 	for {
-		_, _, err := conn.ReadMessage()
-		if err != nil {
+		if _, _, err := conn.NextReader(); err != nil {
 			break
 		}
 	}
@@ -595,10 +621,7 @@ func (w *ClaudeWarp) handleInputAPI(wr http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Input string `json:"input"`
-	}
-
+	var req WebInput
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(wr, "无效的JSON", http.StatusBadRequest)
 		return
@@ -606,7 +629,7 @@ func (w *ClaudeWarp) handleInputAPI(wr http.ResponseWriter, r *http.Request) {
 
 	// 发送到输入通道
 	select {
-	case w.inputChan <- req.Input:
+	case w.inputChan <- req:
 		wr.WriteHeader(http.StatusOK)
 	default:
 		http.Error(wr, "输入队列已满", http.StatusServiceUnavailable)
